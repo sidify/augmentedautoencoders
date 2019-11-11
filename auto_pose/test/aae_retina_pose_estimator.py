@@ -232,6 +232,7 @@ class AePoseEstimator:
                 H_est[:3,3] = t_est
 
             H_est[:3,:3] = R_est
+            print 'rotation from camera: ', H_est[:3,:3]
             print 'translation from camera: ',  H_est[:3,3]
 
             if self._camPose:
