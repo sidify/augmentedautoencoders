@@ -7,6 +7,7 @@ import configparser
 from webcam_video_stream import WebcamVideoStream
 from auto_pose.ae.utils import get_dataset_path
 from aae_retina_pose_estimator import AePoseEstimator
+from pypylon import pylon
 
 
 parser = argparse.ArgumentParser()
@@ -28,7 +29,17 @@ test_args.read(test_configpath)
 
 ae_pose_est = AePoseEstimator(test_configpath)
 
-videoStream = WebcamVideoStream(0, ae_pose_est._width, ae_pose_est._height).start()
+#videoStream = WebcamVideoStream(0, ae_pose_est._width, ae_pose_est._height).start()
+# conecting to the first available camera
+camera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateFirstDevice())
+
+# Grabing Continusely (video) with minimal delay
+camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+converter = pylon.ImageFormatConverter()
+
+# converting to opencv bgr format
+converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
 
 if args.vis:
     from auto_pose.meshrenderer import meshrenderer
@@ -43,42 +54,45 @@ if args.vis:
 
 color_dict = [(0,255,0),(0,0,255),(255,0,0),(255,255,0)] * 10
 
-while videoStream.isActive():
+while camera.IsGrabbing() : #videoStream.isActive():
+    grabResult = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+    if grabResult.GrabSucceeded():
+        # Access the image data
+        image = converter.Convert(grabResult)
+        image = image.GetArray()
 
-    image = videoStream.read()
+        boxes, scores, labels = ae_pose_est.process_detection(image)
 
-    boxes, scores, labels = ae_pose_est.process_detection(image)
+        all_pose_estimates, all_class_idcs = ae_pose_est.process_pose(boxes, labels, image)
 
-    all_pose_estimates, all_class_idcs = ae_pose_est.process_pose(boxes, labels, image)
+        if args.vis:
+            bgr, depth,_ = renderer.render_many(obj_ids = [clas_idx for clas_idx in all_class_idcs],
+                        W = ae_pose_est._width,
+                        H = ae_pose_est._height,
+                        K = ae_pose_est._camK,
+                        # R = transform.random_rotation_matrix()[:3,:3],
+                        Rs = [pose_est[:3,:3] for pose_est in all_pose_estimates],
+                        ts = [pose_est[:3,3] for pose_est in all_pose_estimates],
+                        near = 10,
+                        far = 10000,
+                        random_light=False,
+                        phong={'ambient':0.4,'diffuse':0.8, 'specular':0.3})
 
-    if args.vis:
-        bgr, depth,_ = renderer.render_many(obj_ids = [clas_idx for clas_idx in all_class_idcs],
-                    W = ae_pose_est._width,
-                    H = ae_pose_est._height,
-                    K = ae_pose_est._camK, 
-                    # R = transform.random_rotation_matrix()[:3,:3],
-                    Rs = [pose_est[:3,:3] for pose_est in all_pose_estimates],
-                    ts = [pose_est[:3,3] for pose_est in all_pose_estimates],
-                    near = 10,
-                    far = 10000,
-                    random_light=False,
-                    phong={'ambient':0.4,'diffuse':0.8, 'specular':0.3})
+            bgr = cv2.resize(bgr,(ae_pose_est._width,ae_pose_est._height))
 
-        bgr = cv2.resize(bgr,(ae_pose_est._width,ae_pose_est._height))
-        
-        g_y = np.zeros_like(bgr)
-        g_y[:,:,1]= bgr[:,:,1]    
-        im_bg = cv2.bitwise_and(image,image,mask=(g_y[:,:,1]==0).astype(np.uint8))                 
-        image_show = cv2.addWeighted(im_bg,1,g_y,1,0)
+            g_y = np.zeros_like(bgr)
+            g_y[:,:,1]= bgr[:,:,1]
+            im_bg = cv2.bitwise_and(image,image,mask=(g_y[:,:,1]==0).astype(np.uint8))
+            image_show = cv2.addWeighted(im_bg,1,g_y,1,0)
 
-        #cv2.imshow('pred view rendered', pred_view)
-        for label,box,score in zip(labels,boxes,scores):
-            box = box.astype(np.int32)
-            xmin,ymin,xmax,ymax = box[0],box[1],box[0]+box[2],box[1]+box[3]
-            print label
-            cv2.putText(image_show, '%s : %1.3f' % (label,score), (xmin, ymax+20), cv2.FONT_ITALIC, .5, color_dict[int(label)], 2)
-            cv2.rectangle(image_show,(xmin,ymin),(xmax,ymax),(255,0,0),2)
+            #cv2.imshow('pred view rendered', pred_view)
+            for label,box,score in zip(labels,boxes,scores):
+                box = box.astype(np.int32)
+                xmin,ymin,xmax,ymax = box[0],box[1],box[0]+box[2],box[1]+box[3]
+                print label
+                cv2.putText(image_show, '%s : %1.3f' % (label,score), (xmin, ymax+20), cv2.FONT_ITALIC, .5, color_dict[int(label)], 2)
+                cv2.rectangle(image_show,(xmin,ymin),(xmax,ymax),(255,0,0),2)
 
-        #cv2.imshow('', bgr)
-        cv2.imshow('real', image_show)
-        cv2.waitKey(1)
+            #cv2.imshow('', bgr)
+            cv2.imshow('real', image_show)
+            cv2.waitKey(1)

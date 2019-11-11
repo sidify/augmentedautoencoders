@@ -1,7 +1,4 @@
-install
-*.npy
-*.pyc
-*.vscode
-*.egg-info
-/data
-/AAE_workspace
+autoencoder_ws/experiments/
+autoencoder_ws/tmp_datasets/
+./idea/
+.idea/
